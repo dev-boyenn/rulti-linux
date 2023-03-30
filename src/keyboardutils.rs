@@ -35,6 +35,10 @@ pub fn send_keyup(hwnd: HWND, key: VIRTUAL_KEY) {
     }
 }
 
+pub fn click_top_left(hwnd:HWND){
+    unsafe { PostMessageA(hwnd, 0x0201, WPARAM(1), LPARAM(0)) };
+}
+
 fn virtual_key_to_scan_code(virtual_key: VIRTUAL_KEY) -> (i32, bool) {
     let scan_code = unsafe { MapVirtualKeyA(virtual_key.0 as u32, 0) as i32 };
     let mut is_extended = false;
