@@ -47,6 +47,6 @@ pub async fn setup_listeners(key_pressed: Sender<String>) {
     .await;
     match returnvalue {
         Ok(_) => (),
-        Err(_) => (panic!("Error in hotkey listener")),
+        Err(_) => panic!("Error in hotkey listener"),
     }
 }
