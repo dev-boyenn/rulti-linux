@@ -10,7 +10,12 @@ pub fn setup_listeners(key_pressed: Sender<String>) {
     let hook = Hook::new().unwrap();
     hook.register(Hotkey::from(KeyCode::F13), {
         let key_pressed = key_pressed.clone();
-        move || key_pressed.blocking_send("reset_bag".into()).unwrap()
+
+        move || {
+            if hwndutils::is_active(get_wall_hwnd()) {
+                key_pressed.blocking_send("reset_bag".into()).unwrap()
+            }
+        }
     })
     .unwrap();
     hook.register(Hotkey::from(KeyCode::Backquote), {
