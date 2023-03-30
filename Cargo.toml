@@ -16,6 +16,8 @@ powershell_script = "1.0.4"
 regex = "1.7.3"
 global-hotkey = "0.1.2"
 livesplit-hotkey = "0.7.0"
+hotkey = "0.3.1"
+windows-hotkeys = "0.1.1"
 [dependencies.windows]
 version = "0.43"
 features = [

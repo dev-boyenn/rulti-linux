@@ -17,7 +17,7 @@ mod hwndutils;
 mod instance;
 mod instancemanager;
 mod keyboardutils;
-use livesplit_hotkey::{Hook, Hotkey};
+
 #[tokio::main]
 async fn main() {
     let mut preview_becomes_ready_channel = channel(1);
@@ -26,13 +26,12 @@ async fn main() {
     let mut instance_manager =
         instancemanager::InstanceManager::initialize(preview_becomes_ready_channel.0);
 
-        hotkeys::setup_listeners(hotkeys_channel.0);
+    tokio::spawn(async move {
+        hotkeys::setup_listeners(hotkeys_channel.0).await;
+    });
     loop {
         select! {
-        // event = GlobalHotKeyEvent::receiver().recv() => {
-        //     // println!("{:?}", event);
-        // },
-        instance_num = preview_becomes_ready_channel.1.recv() =>{
+            instance_num = preview_becomes_ready_channel.1.recv() =>{
                 let instance_arc = instance_manager.get_instance_by_instance_num(instance_num.unwrap());
                 match instance_arc {
                     Some(instance_arc) => {
@@ -47,6 +46,26 @@ async fn main() {
             Some(hotkey) = hotkeys_channel.1.recv() => {
                     println!("Received hotkey: {}", hotkey);
                     match hotkey.as_str() {
+                        "lock" => {
+                        let left_click = hwndutils::get_mouse_pos();
+                                               wall_instances.iter().for_each(|wall_instance|{
+
+                       if (wall_instance.x < left_click.0 as usize && wall_instance.x + wall_instance.width > left_click.0 as usize) && (wall_instance.y < left_click.1 as usize && wall_instance.y + wall_instance.height > left_click.1 as usize){
+                           println!("Found instance: {}", wall_instance.instance_num);
+                           let instance_arc = instance_manager.get_instance_by_instance_num(wall_instance.instance_num);
+                           match instance_arc {
+                               Some(instance_arc) => {
+                                   instance_manager.preview_unlocked_wall_queue.remove_by_instance_num(instance_arc.instance_num);
+                                   instance_manager.lock(instance_arc.instance_num);
+                               }
+                               None => {
+                                   println!("Received a lock message for an instance that doesn't exist");
+                               }
+                           }
+                       }
+                   });
+                        },
+
                         "reset_bag" => {
                             println!("Resetting all instances");
                             if instance_manager.preview_unlocked_wall_queue.can_pop() {
@@ -113,15 +132,15 @@ async fn main() {
                 }
             },
         }
+        println!("Updating affinities");
+        instance_manager.update_affinities();
+        println!(
+            "preview_unlocked_wall_queue: {}",
+            instance_manager.preview_unlocked_wall_queue.len()
+        );
+        wall_instances = write_wall_queue_to_json_file(
+            &instance_manager.preview_unlocked_wall_queue,
+            &instance_manager.instances,
+        );
     }
-    println!("Updating affinities");
-    instance_manager.update_affinities();
-    println!(
-        "preview_unlocked_wall_queue: {}",
-        instance_manager.preview_unlocked_wall_queue.len()
-    );
-    wall_instances = write_wall_queue_to_json_file(
-        &instance_manager.preview_unlocked_wall_queue,
-        &instance_manager.instances,
-    );
 }

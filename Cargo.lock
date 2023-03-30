@@ -230,6 +230,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "hotkey"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "68ed8ca7b33e83cea6c667b7c7185443c39fb155f593dd8eb168ecdd12bed5c8"
+dependencies = [
+ "winapi",
+ "x11-dl",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -521,6 +531,7 @@ version = "0.1.0"
 dependencies = [
  "atomic_enum",
  "global-hotkey",
+ "hotkey",
  "livesplit-hotkey",
  "powershell_script",
  "rdev",
@@ -530,6 +541,7 @@ dependencies = [
  "strum_macros",
  "tokio",
  "windows",
+ "windows-hotkeys",
 ]
 
 [[package]]
@@ -787,6 +799,16 @@ dependencies = [
  "windows_x86_64_gnu",
  "windows_x86_64_gnullvm",
  "windows_x86_64_msvc",
+]
+
+[[package]]
+name = "windows-hotkeys"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf639443a304e8a3a408f6bc812071a0e59770f74e19030162351f83a5e486e1"
+dependencies = [
+ "thiserror",
+ "winapi",
 ]
 
 [[package]]

@@ -2,7 +2,7 @@ use std::{
     mem::zeroed,
     sync::atomic::{
         AtomicBool,
-        Ordering::{self, SeqCst},
+        Ordering::{SeqCst},
     },
     thread,
     time::{self, Duration},
@@ -10,7 +10,6 @@ use std::{
 
 use crate::{
     hwndutils,
-    instancemanager::write_wall_queue_to_json_file,
     keyboardutils::{send_keydown, send_keypress, send_keyup},
 };
 use atomic_enum::atomic_enum;
@@ -192,7 +191,7 @@ impl Instance {
 
     pub fn exit(&self) {
         println!("Exiting");
-        if (self.thin.load(SeqCst)) {
+        if self.thin.load(SeqCst) {
             self.thin();
         }
         send_keydown(self.hwnd, VK_F11);
