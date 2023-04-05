@@ -28,91 +28,78 @@ pub struct InstanceManager {
     pub preview_unlocked_wall_queue: WallQueue,
     pub locked_instances: Vec<Arc<Instance>>,
     instance_becomes_preview_sender: Sender<u32>,
-}
-pub fn set_affinity(hwnd: HWND, thread_count: u32) {
-    let process_id = get_hwnd_pid(hwnd);
-    let process_handle = unsafe { OpenProcess(PROCESS_ACCESS_RIGHTS(0x0200), false, process_id) };
-    let affinity = (1 << thread_count) - 1;
-    match process_handle {
-        Ok(handle) => {
-            unsafe { SetProcessAffinityMask(handle, affinity as usize) };
-            unsafe { CloseHandle(handle) };
-            // println!(
-            //     "Set affinity of process {} to {:#018b} with wanted thread count {}",
-            //     process_id, affinity, thread_count
-            // );
-        }
-        Err(e) => {
-            println!("Error: {}", e);
-        }
-    }
+    instance_preview_percent_sender: Sender<u32>,
+    affinity_map: HashMap<u32, u32>,
 }
 
 impl InstanceManager {
-    fn new(preview_becomes_ready_sender: Sender<u32>) -> Self {
+    fn new(preview_becomes_ready_sender: Sender<u32>,instance_preview_percent_sender:Sender<u32>) -> Self {
         Self {
             instances: Vec::new(),
             reset_cancel_channels: HashMap::new(),
             locked_instances: Vec::new(),
             preview_unlocked_wall_queue: WallQueue::new(),
             instance_becomes_preview_sender: preview_becomes_ready_sender,
+            instance_preview_percent_sender: instance_preview_percent_sender,
+            affinity_map: HashMap::new(),
         }
     }
-    pub fn update_affinities(&self) {
+
+    pub fn update_affinities(&mut self) {
         let playing_instance = self.get_playing_instance();
 
         match playing_instance {
             Some(instance) => {
-                set_affinity(instance.hwnd, 30);
+                instance.set_affinity(((1 << 28) - 1) << 4);
                 self.instances
                     .iter()
                     .for_each(|instance| match instance.state.load(SeqCst) {
                         InstanceState::Idle | InstanceState::Preview => {
-                            set_affinity(instance.hwnd, 4)
+                            instance.set_affinity((1 << 4) - 1)
                         }
                         InstanceState::Resetting | InstanceState::LoadingScreen => {
-                            set_affinity(instance.hwnd, 8)
+                            instance.set_threadcount((1 << 4) - 1)
                         }
                         InstanceState::Playing => (),
                     });
             }
             None => {
-                self.instances
-                    .iter()
-                    .for_each(|instance| match instance.state.load(SeqCst) {
-                        InstanceState::Idle => set_affinity(instance.hwnd, 4),
-                        InstanceState::Preview => match instance.locked.load(SeqCst) {
-                            true => set_affinity(instance.hwnd, 30),
-                            false => set_affinity(instance.hwnd, 16),
-                        },
-                        InstanceState::Resetting | InstanceState::LoadingScreen => {
-                            set_affinity(instance.hwnd, 30)
-                        }
-                        InstanceState::Playing => (),
-                    });
+                self.instances.iter().for_each(
+                    |instance| instance.set_threadcount(2), // match instance.state.load(SeqCst) {
+                                                            // InstanceState::Idle => instance.set_affinity(4),
+                                                            // InstanceState::Preview => match instance.locked.load(SeqCst) {
+                                                            //     true => instance.set_affinity(16),
+                                                            //     false => instance.set_affinity(4),
+                                                            // },
+                                                            // InstanceState::Resetting | InstanceState::LoadingScreen => {
 
-                match self.locked_instances.get(0){
+                                                            // }
+                                                            // InstanceState::Playing => (),
+                                                            // }
+                );
+
+                match self.locked_instances.get(0) {
                     Some(instance) => {
-                        set_affinity(instance.hwnd, 30);
+                        instance.set_threadcount(30);
                     }
-                    None => ()
+                    None => (),
                 }
             }
         }
     }
 
-    pub fn initialize(preview_becomes_ready_sender: Sender<u32>) -> Self {
-        let mut instance_manager = Self::new(preview_becomes_ready_sender);
+    pub fn initialize(preview_becomes_ready_sender: Sender<u32>,instance_preview_percent_sender:Sender<u32>) -> Self {
+        let mut instance_manager = Self::new(preview_becomes_ready_sender,instance_preview_percent_sender);
 
         // Enumerate all windows and find the ones that match the game title, creating instances for them
         hwndutils::enum_windows(|hwnd| unsafe {
             let text = hwndutils::get_hwnd_title(hwnd);
             if text.contains(GAME_TITLE) {
-                set_affinity(hwnd, 30);
-
                 println!("found instance window");
                 let process_id = get_hwnd_pid(hwnd);
-                let instance = Instance::new(hwnd, get_instance_num(process_id));
+
+                let mut instance = Instance::new(hwnd, get_instance_num(process_id), process_id);
+                instance.set_threadcount(30);
 
                 instance.set_instance_title();
                 hwndutils::set_borderless(hwnd);
@@ -147,7 +134,7 @@ impl InstanceManager {
             .cloned()
             .collect::<Vec<_>>();
         for instance in cloned_instances {
-            println!("Resetting instance: {}", instance.instance_num);
+            // println!("Resetting instance: {}", instance.instance_num);
             self.reset_instance(instance.clone());
         }
     }
@@ -164,8 +151,9 @@ impl InstanceManager {
         self.reset_cancel_channels
             .insert(instance.instance_num, cancel_channel.0);
         let sender = self.instance_becomes_preview_sender.clone();
+        let percent_sender = self.instance_preview_percent_sender.clone();
         tokio::spawn(async move {
-            instance.reset(cancel_channel.1, sender).await;
+            instance.reset(cancel_channel.1, sender,percent_sender).await;
         });
     }
     pub fn lock(&mut self, instance_num: u32) {
@@ -220,11 +208,17 @@ fn get_instance_num(process_id: u32) -> u32 {
     match powershell_script::run(command.as_str()) {
         Ok(command_line) => {
             match instance_number_regex.captures(command_line.to_string().as_str()) {
-                Some(matched_numbers) =>{
-                    matched_numbers.get(1).unwrap().as_str().parse::<u32>().unwrap()
-                },
+                Some(matched_numbers) => matched_numbers
+                    .get(1)
+                    .unwrap()
+                    .as_str()
+                    .parse::<u32>()
+                    .unwrap(),
                 None => {
-                    panic!("Could not find instance number in command line: {}", command_line)
+                    panic!(
+                        "Could not find instance number in command line: {}",
+                        command_line
+                    )
                 }
             }
         }
@@ -235,7 +229,7 @@ fn get_instance_num(process_id: u32) -> u32 {
 }
 
 pub struct WallQueue {
-    queue: Vec<Arc<Instance>>,
+    queue: Vec<Option<Arc<Instance>>>,
     bag_size: usize,
 }
 
@@ -247,14 +241,19 @@ impl WallQueue {
         }
     }
     pub fn pop(&mut self) -> Vec<Arc<Instance>> {
-        self.queue.drain(0..self.bag_size).collect()
+        let maybe_instances = self.queue.drain(0..self.bag_size);
+        let ret_instances = maybe_instances
+            .filter_map(|maybe_instance| maybe_instance)
+            .collect::<Vec<_>>();
+        self.queue = self.queue.iter().filter(|maybe_instance| maybe_instance.is_some()).cloned().collect::<Vec<_>>();
+        ret_instances
     }
     pub fn can_pop(&self) -> bool {
         self.queue.len() >= self.bag_size
     }
 
     pub fn push(&mut self, instance: Arc<Instance>) {
-        self.queue.push(instance);
+        self.queue.push(Some(instance));
     }
     pub fn clear(&mut self) {
         self.queue.clear();
@@ -262,10 +261,24 @@ impl WallQueue {
     pub fn len(&self) -> usize {
         self.queue.len()
     }
-
     pub fn remove_by_instance_num(&mut self, instance_num: u32) {
-        self.queue
-            .retain(|instance| instance.instance_num != instance_num);
+        // Replaces the instance with the given instance number with None
+        let index = self.queue
+            .iter_mut()
+            .position(|maybe_instance| {
+                maybe_instance
+                    .as_ref()
+                    .map(|instance| instance.instance_num == instance_num)
+                    .unwrap_or(false)
+            });
+
+        match index {
+            Some(index) => {
+                self.queue[index] = None;
+            }
+            None => (),
+        }
+            
     }
 }
 
@@ -302,43 +315,56 @@ pub fn write_wall_queue_to_json_file(
     // Create an empty vector to store the instances in
     let mut instances: Vec<WallFileInstance> = Vec::new();
     let mut already_written_instances = Vec::new();
-    let in_play_mode = all_instances.iter().any(|instance| instance.state.load(SeqCst) == InstanceState::Playing);
+    let in_play_mode = all_instances
+        .iter()
+        .any(|instance| instance.state.load(SeqCst) == InstanceState::Playing);
     for instance in &wall_queue.queue {
         if index >= wall_queue.bag_size * wall_queue.bag_size {
             break;
         }
+        match instance {
+            Some(instance) => {
+                // Calculate which bag we're in
+                let bag_index = index / bag_size;
+                let bag_x_pos = bag_index % bags_horizontal;
+                let bag_y_pos = bag_index / bags_vertical;
 
-        // Calculate which bag we're in
-        let bag_index = index / bag_size;
-        let bag_x_pos = bag_index % bags_horizontal;
-        let bag_y_pos = bag_index / bags_vertical;
+                let bag_x = screen_width - bag_x_pos * bag_width - bag_width;
+                let bag_y = screen_height - bag_y_pos * bag_height - bag_height;
+                // Calculate which position in the bag we should be in
+                let instance_x = bag_x + (index % bag_cols) * instance_width;
+                let instance_y =
+                    bag_y + ((index - bag_index * bag_size) / bag_cols) * instance_height;
 
-        let bag_x = screen_width - bag_x_pos * bag_width - bag_width;
-        let bag_y = screen_height - bag_y_pos * bag_height - bag_height;
-        // Calculate which position in the bag we should be in
-        let instance_x = bag_x + (index % bag_cols) * instance_width;
-        let instance_y = bag_y + ((index - bag_index * bag_size) / bag_cols) * instance_height;
+                let _row = index / wall_queue.bag_size;
+                let _col = index % wall_queue.bag_size;
+                let instance_json: WallFileInstance = WallFileInstance {
+                    instance_num: instance.instance_num,
+                    width: instance_width,
+                    height: instance_height,
+                    x: if in_play_mode {
+                        screen_width
+                    } else {
+                        instance_x
+                    },
+                    y: instance_y,
+                    playing: instance.state.load(SeqCst) == InstanceState::Playing,
+                    freeze: (instance.state.load(SeqCst) == InstanceState::Idle || instance.state.load(SeqCst) == InstanceState::Preview) && instance.preview_percent.load(SeqCst) > 80,
 
-        let _row = index / wall_queue.bag_size;
-        let _col = index % wall_queue.bag_size;
-        let instance_json: WallFileInstance = WallFileInstance {
-            instance_num: instance.instance_num,
-            width: instance_width,
-            height: instance_height,
-            x: if in_play_mode {screen_width} else {instance_x},
-            y: instance_y,
-            playing: instance.state.load(SeqCst) == InstanceState::Playing,
-            freeze: false,
-        };
+                };
 
-        // println!("Index {}, Bag {} is at ({},{}), instance is at ({},{}), instance is {}",index, bag_index, bag_x, bag_y, instance_x, instance_y, instance.instance_num);
-        // println!(
-        //     "Index {}, instance is at ({},{}), instance is {}",
-        //     index, instance_json.x, instance_json.y, instance.instance_num
-        // );
+                // println!("Index {}, Bag {} is at ({},{}), instance is at ({},{}), instance is {}",index, bag_index, bag_x, bag_y, instance_x, instance_y, instance.instance_num);
+                // println!(
+                //     "Index {}, instance is at ({},{}), instance is {}",
+                //     index, instance_json.x, instance_json.y, instance.instance_num
+                // );
 
-        instances.push(instance_json);
-        already_written_instances.push(instance.clone());
+                instances.push(instance_json);
+                already_written_instances.push(instance.clone());
+            }
+            None => {},
+        }
+
         index += 1;
     }
 
@@ -355,12 +381,12 @@ pub fn write_wall_queue_to_json_file(
                 x: screen_width,
                 y: 0,
                 playing: instance.state.load(SeqCst) == InstanceState::Playing,
-                freeze: false,
+                freeze: (instance.state.load(SeqCst) == InstanceState::Idle || instance.state.load(SeqCst) == InstanceState::Preview) && instance.preview_percent.load(SeqCst) > 80,
             };
             instances.push(instance_json);
-        }
-        println!("Is in play mode: {}", in_play_mode);
 
+        }
+        // println!("Is in play mode: {}", in_play_mode);
     }
 
     // write the instances to a string

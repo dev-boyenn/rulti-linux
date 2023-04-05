@@ -35,7 +35,7 @@ pub fn send_keyup(hwnd: HWND, key: VIRTUAL_KEY) {
     }
 }
 
-pub fn click_top_left(hwnd:HWND){
+pub fn click_top_left(hwnd: HWND) {
     unsafe { PostMessageA(hwnd, 0x0201, WPARAM(1), LPARAM(0)) };
 }
 

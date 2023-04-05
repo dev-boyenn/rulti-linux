@@ -24,9 +24,7 @@ pub async fn setup_listeners(key_pressed: Sender<String>) {
             let key_pressed = key_pressed.clone();
             move || {
                 if hwndutils::is_active(get_wall_hwnd()) {
-                    key_pressed
-                        .blocking_send("lock".into())
-                        .unwrap()
+                    key_pressed.blocking_send("lock".into()).unwrap()
                 } else {
                     key_pressed.blocking_send("toggle_thin".into()).unwrap()
                 }
