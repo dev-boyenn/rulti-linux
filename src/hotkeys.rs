@@ -2,8 +2,6 @@ use tokio::sync::mpsc::Sender;
 use tokio::task::spawn_blocking;
 
 use crate::hwndutils::{self, get_wall_hwnd};
-use windows_hotkeys::keys::VKey;
-use windows_hotkeys::HotkeyManager;
 pub async fn setup_listeners(key_pressed: Sender<String>) {
     let returnvalue = spawn_blocking(move || {
         let mut hkm = HotkeyManager::new();

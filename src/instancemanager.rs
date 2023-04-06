@@ -9,17 +9,10 @@ use std::{
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{channel, Sender};
-use windows::Win32::{
-    Foundation::{CloseHandle, HWND},
-    System::Threading::{OpenProcess, SetProcessAffinityMask, PROCESS_ACCESS_RIGHTS},
-    UI::WindowsAndMessaging::MoveWindow,
-};
+use x11rb::connection::Connection;
 
-use crate::{
-    hwndutils::{self, get_hwnd_pid},
-    instance::{Instance, InstanceState},
-    keyboardutils::click_top_left,
-};
+use crate::{x11::{InstanceInfo, set_window_title}, instance::{Instance, InstanceState}};
+
 const GAME_TITLE: &str = "Minecraft*";
 
 pub struct InstanceManager {
@@ -88,33 +81,25 @@ impl InstanceManager {
         }
     }
 
-    pub fn initialize(preview_becomes_ready_sender: Sender<u32>,instance_preview_percent_sender:Sender<u32>) -> Self {
+    pub fn initialize(preview_becomes_ready_sender: Sender<u32>,instance_preview_percent_sender:Sender<u32>,instance_infos: Vec<InstanceInfo>, conn: &impl Connection) -> Self {
         let mut instance_manager = Self::new(preview_becomes_ready_sender,instance_preview_percent_sender);
 
-        // Enumerate all windows and find the ones that match the game title, creating instances for them
-        hwndutils::enum_windows(|hwnd| unsafe {
-            let text = hwndutils::get_hwnd_title(hwnd);
-            if text.contains(GAME_TITLE) {
-                println!("found instance window");
-                let process_id = get_hwnd_pid(hwnd);
+        for instance_info in instance_infos {
+            let title = format !("Minecraft* - Instance {}\0", instance_info.instance_num);
+            println!("window: {}", instance_info.window);
+            set_window_title(conn, instance_info.window, &title ).unwrap();
 
-                let mut instance = Instance::new(hwnd, get_instance_num(process_id), process_id);
-                instance.set_threadcount(30);
-
-                instance.set_instance_title();
-                hwndutils::set_borderless(hwnd);
-                MoveWindow(hwnd, 0, 680, 1920, 400, true);
-                click_top_left(hwnd);
-                let instance_arc = Arc::new(instance);
-
-                instance_manager.instances.push(instance_arc.clone());
-                instance_manager
-                    .preview_unlocked_wall_queue
-                    .push(instance_arc.clone());
-            }
-
-            true.into()
-        });
+            let instance = Instance::new(instance_info);
+            instance.set_threadcount(30);
+            // hwndutils::set_borderless(instance_info.hwnd);
+            // MoveWindow(instance_info.hwnd, 0, 680, 1920, 400, true);
+            // click_top_left(instance_info.hwnd);
+            let instance_arc= Arc::new(instance);
+            instance_manager.instances.push(instance_arc.clone());
+            instance_manager
+                .preview_unlocked_wall_queue
+                .push(instance_arc.clone());
+        }
         instance_manager
     }
 
@@ -140,7 +125,7 @@ impl InstanceManager {
     }
 
     pub fn reset_instance(&mut self, instance: Arc<Instance>) {
-        match self.reset_cancel_channels.get(&instance.instance_num) {
+        match self.reset_cancel_channels.get(&instance.instance_info.instance_num) {
             Some(sender) => match sender.send(()) {
                 _ => (),
             },
@@ -149,7 +134,7 @@ impl InstanceManager {
 
         let cancel_channel = channel(1); // TODO: Figure out bound size
         self.reset_cancel_channels
-            .insert(instance.instance_num, cancel_channel.0);
+            .insert(instance.instance_info.instance_num, cancel_channel.0);
         let sender = self.instance_becomes_preview_sender.clone();
         let percent_sender = self.instance_preview_percent_sender.clone();
         tokio::spawn(async move {
@@ -165,12 +150,12 @@ impl InstanceManager {
         let instance = self.get_instance_by_instance_num(instance_num).unwrap();
         instance.unlock();
         self.locked_instances
-            .retain(|locked_instance| locked_instance.instance_num != instance.instance_num);
+            .retain(|locked_instance| locked_instance.instance_info.instance_num != instance.instance_info.instance_num);
     }
     pub fn get_instance_by_instance_num(&self, instance_num: u32) -> Option<Arc<Instance>> {
         self.instances
             .iter()
-            .find(|instance| instance.instance_num == instance_num)
+            .find(|instance| instance.instance_info.instance_num == instance_num)
             .map(Arc::clone)
     }
     pub fn get_unlocked_idle_instances(&self) -> Vec<Arc<Instance>> {
@@ -268,7 +253,7 @@ impl WallQueue {
             .position(|maybe_instance| {
                 maybe_instance
                     .as_ref()
-                    .map(|instance| instance.instance_num == instance_num)
+                    .map(|instance| instance.instance_info.instance_num == instance_num)
                     .unwrap_or(false)
             });
 
@@ -339,7 +324,7 @@ pub fn write_wall_queue_to_json_file(
                 let _row = index / wall_queue.bag_size;
                 let _col = index % wall_queue.bag_size;
                 let instance_json: WallFileInstance = WallFileInstance {
-                    instance_num: instance.instance_num,
+                    instance_num: instance.instance_info.instance_num,
                     width: instance_width,
                     height: instance_height,
                     x: if in_play_mode {
@@ -371,11 +356,11 @@ pub fn write_wall_queue_to_json_file(
     for instance in all_instances {
         if !already_written_instances
             .iter()
-            .find(|inst| inst.instance_num == instance.instance_num)
+            .find(|inst| inst.instance_info.instance_num == instance.instance_info.instance_num)
             .is_some()
         {
             let instance_json: WallFileInstance = WallFileInstance {
-                instance_num: instance.instance_num,
+                instance_num: instance.instance_info.instance_num,
                 width: 1,
                 height: 1,
                 x: screen_width,
